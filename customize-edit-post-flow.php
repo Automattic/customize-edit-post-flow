@@ -61,6 +61,9 @@ class WP_Customize_Post_Edit_Flow {
 	}
 
 	public function post_edit_notice() {
+		if ( ! isset( $_GET['return_uuid'] ) ) {
+			return;
+		}
 		$post_object = get_post_type_object( get_post()->post_type );
 		$message = sprintf( __( 'After you finish editing this %s, you can return to customizing your site\'s appearance.'  ), $post_object->labels->singular_name );
 		echo '<div class="notice notice-warning is-dismissible"><p>' . $message . '</p></div>';
