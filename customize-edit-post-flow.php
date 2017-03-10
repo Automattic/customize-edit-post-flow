@@ -34,6 +34,8 @@ class WP_Customize_Post_Edit_Flow {
 
 	private static $instance = null;
 
+	private static $opt = 'post_edit_flow_changeset';
+
 	public static function get_instance() {
 		if ( ! isset( self::$instance ) )
 			self::$instance = new self;
@@ -43,25 +45,35 @@ class WP_Customize_Post_Edit_Flow {
 
 	private function __construct() {
 		add_action( 'customize_register', array( $this, 'customizer_init' ) );
-		add_action( 'edit_form_top', array( $this, 'post_edit_notice' ) );
-		add_filter( 'redirect_post_location', array( $this, 'maybe_add_return_to_redirect' ) );
-		add_action( 'edit_form_top', array( $this, 'maybe_add_hidden_field' ) );
+		add_action( 'admin_notices', array( $this, 'admin_notice' ) );
+		add_action( 'wp_ajax_post_edit_redirect_save', array( $this, 'save_redirect' ) );
+		add_action( 'wp_ajax_post_edit_redirect_delete', array( $this, 'delete_redirect' ) );
 	}
 
-	public function maybe_add_hidden_field() {
-		if ( ! isset( $_GET['customizer_return'] ) || ! $this->is_customizer_url( $_GET['customizer_return'] ) ) {
-			return;
+	public function delete_redirect() {
+		if ( ! current_user_can( 'customize' ) || empty( $_POST['nonce'] ) ) {
+			return wp_send_json_error();
+		}
+		if ( ! wp_verify_nonce( $_POST['nonce'], 'post_edit_flow_redirect_delete' ) ) {
+			return wp_send_json_error();
 		}
 
-		printf( '<input type="hidden" name="%s" value="%s" />', 'customizer_return', esc_attr( $_GET['customizer_return'] ) );
+		delete_option( self::$opt );
+		return wp_send_json_success();
 	}
 
-	public function maybe_add_return_to_redirect( $location ) {
-		if ( isset( $_POST['customizer_return'] ) ) {
-			// todo verify _return_to_customizer_url
-			$location = add_query_arg( 'customizer_return', $_POST['customizer_return'], $location );
+	public function save_redirect() {
+		if ( ! current_user_can( 'customize' ) || empty( $_POST['changeset_flow'] ) ) {
+			return wp_send_json_error();
 		}
-		return $location;
+
+		// validate the changeset UUID
+		if ( ! preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $_POST['changeset_flow'] ) ) {
+			return wp_send_json_error();
+		}
+
+		update_option( self::$opt, $_POST['changeset_flow'] );
+		wp_send_json_success();
 	}
 
 	public function customizer_init() {
@@ -75,7 +87,7 @@ class WP_Customize_Post_Edit_Flow {
 	}
 
 	public function controls_script() {
-		wp_enqueue_script( 'edit-post-flow', plugins_url( 'js/customize-edit-post-flow-admin.js', __FILE__ ), array( 'customize-controls' ), '20170201', true );
+		wp_enqueue_script( 'edit-post-flow', plugins_url( 'js/customize-edit-post-flow-admin.js', __FILE__ ), array( 'customize-controls', 'wp-util' ), '20170201', true );
 	}
 
 	private function did_get_refered_from_customizer() {
@@ -121,6 +133,39 @@ class WP_Customize_Post_Edit_Flow {
 			$message .= sprintf( ' <a href="%s">%s</a>', esc_url( $_REQUEST['customizer_return'] ), __( 'Continue customizing your site.' ) );
 		}
 		echo '<div class="notice notice-warning is-dismissible"><p>' . $message . '</p></div>';
+	}
+
+	private function has_changeset_in_progress() {
+		return ( bool ) $this->get_changeset_in_progress();
+	}
+
+	private function get_changeset_in_progress() {
+		return get_option( self::$opt );
+	}
+
+	public function admin_notice() {
+		if ( ! current_user_can( 'customize' ) || ! $this->has_changeset_in_progress() ) {
+			return;
+		}
+
+		$return_link = add_query_arg( 'changeset_uuid', $this->get_changeset_in_progress(), admin_url( 'customize.php' ) );
+		$link_text = __( 'Continue customizing your site.' );
+		$link = sprintf( '<a href="%s">%s</a>', $return_link, $link_text );
+
+		if ( 'post' === get_current_screen()->base ) {
+			$note = __( 'Done editing?' );
+		} else {
+			$note = __( 'You left some unsaved settings behind.' );
+		}
+		/* translators: 1. A reminder about your unsaved customizations 2. A link to continue customizing. */
+		$format = __( '%1$s %2$s' );
+
+		printf( '<div id="customizer-return" class="notice notice-info is-dismissible"><p>%s</p></div>', sprintf( $format, $note, $link ) );
+		wp_enqueue_script( 'edit-post-flow-notice', plugins_url( 'js/customize-edit-post-flow-notice.js', __FILE__ ), array( 'wp-util' ), '20170214', true );
+		wp_localize_script( 'edit-post-flow-notice', '_editPostFlowNotice', array(
+			'confirm' => __( 'Do you want to discard your unsaved Customizer changes?' ),
+			'nonce' => wp_create_nonce( 'post_edit_flow_redirect_delete' ),
+		) );
 	}
 
 }
